@@ -1,0 +1,283 @@
+#version 300 es
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+
+out vec4 fragColor;
+uniform vec2 resolution;
+uniform float startRandom;
+uniform int frame;
+uniform sampler2D backbuffer;
+
+//------------Settings--------------
+float fov = 60.;
+int itr = 6;//number of bounces
+//----------------------------------
+
+struct sphere{
+ vec3 pos;
+ float radius;
+ vec3 color;
+ float smoothness;
+ float emission;
+};
+
+struct cuboid{
+ vec3 pos;
+ vec3 size;
+ vec3 color;
+ float smoothness;
+ float emission;
+};
+
+sphere spheres[3];
+cuboid cuboids[6];
+void initializeSpheres(){
+ spheres[0].pos = vec3(0.1,-0.8,-1.3);
+ spheres[0].radius = 0.2;
+ spheres[0].color = vec3(0.37,0.8,0.25);
+ spheres[0].smoothness = 0.59;
+ spheres[0].emission = 0.2;
+
+ spheres[1].pos = vec3(0.5,0.6,-2.);
+ spheres[1].radius = 0.3;
+ spheres[1].color = vec3(0.9,0.28,0.66);
+ spheres[1].smoothness = 0.1;
+ spheres[1].emission = 0.8;
+
+ spheres[2].pos = vec3(-0.15,-0.13,-1.);
+ spheres[2].radius = 0.1;
+ spheres[2].color = vec3(0.2,0.34,0.9);
+ spheres[2].smoothness = 0.7;
+ spheres[2].emission = 0.5;
+}
+void initializeCuboids(){
+ cuboids[0].pos = vec3(0.,0.,-3.);
+ cuboids[0].size = vec3(1.,1.,0.01);
+ cuboids[0].color = vec3(0.8,0.8,0.8);
+ cuboids[0].smoothness = 0.9;
+ cuboids[0].emission = 0.;
+
+ cuboids[1].pos = vec3(0.,0.,3.);
+ cuboids[1].size = vec3(1.,1.,0.4);
+ cuboids[1].color = vec3(0.8,0.8,0.8);
+ cuboids[1].smoothness = 0.9;
+ cuboids[1].emission = 0.;
+
+ cuboids[2].pos = vec3(0.,1.,0.);
+ cuboids[2].size = vec3(3,0.01,3.);
+ cuboids[2].color = vec3(1.,1.,1.);
+ cuboids[2].smoothness = 0.;
+ cuboids[2].emission = 0.15;
+
+ cuboids[3].pos = vec3(0.,-1.,0.);
+ cuboids[3].size = vec3(3,0.01,3.);
+ cuboids[3].color = vec3(1.,1.,1.);
+ cuboids[3].smoothness = 0.;
+ cuboids[3].emission = 0.;
+
+ cuboids[4].pos = vec3(1.,0.,0.);
+ cuboids[4].size = vec3(0.01,3.,3.);
+ cuboids[4].color = vec3(1.,1.,1.);
+ cuboids[4].smoothness = 1.;
+ cuboids[4].emission = 0.;
+
+ cuboids[5].pos = vec3(-1.,0.,0.);
+ cuboids[5].size = vec3(0.01,3.,3.);
+ cuboids[5].color = vec3(1.,1.,1.);
+ cuboids[5].smoothness = 1.;
+ cuboids[5].emission = 0.;
+}
+
+struct hitMaterial{
+ vec3 color;
+ float smoothness;
+ float emission;
+};
+
+vec3 camPos = vec3(0.,0.,0.);//cam faces -z dir
+float yRot = 0.;//In radians
+float xRot = 0.;//In radians
+mat3 rotMatrix;
+vec3 rayDir;
+vec3 rayPos;
+vec3 surfacePos = vec3(0.,0.,0.);
+vec3 normal;
+vec3 rayColor = vec3(1.,1.,1.);
+vec3 finalColor = vec3(0.,0.,0.);
+bool hit = false;
+float t=10000000.;
+hitMaterial hitMat;
+
+float rand(float x){
+ vec2 uv = gl_FragCoord.xy/resolution;
+ return fract(sin(50.*(uv.x+uv.x*uv.y)+x+startRandom*10.32)*43758.5453123);
+}
+
+//Facing -z by default
+vec3 findInitRayDir(){
+ vec2 centered = gl_FragCoord.xy - vec2(resolution.x,resolution.y)/2.;
+ float zDist = -(resolution.x/2.)/tan(radians(fov/2.));
+ vec3 dir = normalize(vec3(centered, zDist));
+ rotMatrix = mat3(cos(yRot) ,0. ,-sin(yRot),
+          sin(xRot)*sin(yRot),cos(xRot) ,sin(xRot)*cos(yRot),
+          cos(xRot)*sin(yRot),-sin(xRot),cos(xRot)*cos(yRot));
+ dir = rotMatrix*dir;
+ return dir;
+}
+
+//Check for axis aligned plane collision. lower is the lower corner of the plane
+void cubePlaneCheck(vec3 lower, vec3 upper, cuboid cuboid){
+ if(lower.x == upper.x){
+  float t0 = (lower.x-rayPos.x)/rayDir.x;
+  if(t0<0.){
+   return;//Ray didn't intersect
+  }
+  //SP short for surface position
+  vec3 potentialSP = rayPos + t0*rayDir;
+  if(potentialSP.y>lower.y && potentialSP.y<upper.y && potentialSP.z>lower.z && potentialSP.z<upper.z){
+   hit = true;
+   if (t0<t){
+    t = t0;
+    surfacePos = potentialSP;
+    normal = vec3(sign(lower.x-cuboid.pos.x),0.,0.);
+    hitMat.color = cuboid.color;
+    hitMat.smoothness = cuboid.smoothness;
+    hitMat.emission = cuboid.emission;
+   }
+  }
+ }
+ if(lower.y == upper.y){
+  float t0 = (lower.y-rayPos.y)/rayDir.y;
+  if(t0<0.){
+   return;//Ray didn't intersect
+  }
+  //SP short for surface position
+  vec3 potentialSP = rayPos + t0*rayDir;
+  if(potentialSP.x>lower.x && potentialSP.x<upper.x && potentialSP.z>lower.z && potentialSP.z<upper.z){
+   hit = true;
+   if (t0<t){
+    t = t0;
+    surfacePos = potentialSP;
+    normal = vec3(0.,sign(lower.y-cuboid.pos.y),0.);
+    hitMat.color = cuboid.color;
+    hitMat.smoothness = cuboid.smoothness;
+    hitMat.emission = cuboid.emission;
+   }
+  }
+ }
+ if(lower.z == upper.z){
+  float t0 = (lower.z-rayPos.z)/rayDir.z;
+  if(t0<0.){
+   return;//Ray didn't intersect
+  }
+  //SP short for surface position
+  vec3 potentialSP = rayPos + t0*rayDir;
+  if(potentialSP.y>lower.y && potentialSP.y<upper.y && potentialSP.x>lower.x && potentialSP.x<upper.x){
+   hit = true;
+   if (t0<t){
+    t = t0;
+    surfacePos = potentialSP;
+    normal = vec3(0.,0.,sign(lower.z-cuboid.pos.z));
+    hitMat.color = cuboid.color;
+    hitMat.smoothness = cuboid.smoothness;
+    hitMat.emission = cuboid.emission;
+   }
+  }
+ }
+}
+
+void cubeCheck(){
+ for (int i=0;i<cuboids.length();i++){
+  cubePlaneCheck(cuboids[i].pos+cuboids[i].size*vec3(1.,-1.,-1.),cuboids[i].pos+cuboids[i].size,cuboids[i]);
+  cubePlaneCheck(cuboids[i].pos-cuboids[i].size,cuboids[i].pos+cuboids[i].size*vec3(-1.,1.,1.),cuboids[i]);
+  cubePlaneCheck(cuboids[i].pos+cuboids[i].size*vec3(-1.,1.,-1.),cuboids[i].pos+cuboids[i].size,cuboids[i]);
+  cubePlaneCheck(cuboids[i].pos-cuboids[i].size,cuboids[i].pos+cuboids[i].size*vec3(1.,-1.,1.),cuboids[i]);
+  cubePlaneCheck(cuboids[i].pos+cuboids[i].size*vec3(-1.,-1.,1.),cuboids[i].pos+cuboids[i].size,cuboids[i]);
+  cubePlaneCheck(cuboids[i].pos-cuboids[i].size,cuboids[i].pos+cuboids[i].size*vec3(1.,1.,-1.),cuboids[i]);
+ }
+}
+
+void sphereCheck(){
+ //Iterates over each sphere and finds the smallest t value;
+ float a = 1.;
+ for (int i=0;i<spheres.length();i++){
+  float dSp = dot(rayDir, spheres[i].pos);
+  float dP = dot(rayDir, rayPos);
+  float PSp = dot(rayPos, spheres[i].pos);
+  float b = 2.*dP-2.*dSp;
+  float c = dot(rayPos,rayPos)-2.*PSp+dot(spheres[i].pos,spheres[i].pos)-pow(spheres[i].radius,2.);
+  float delta = b*b - 4.*c;
+  if (delta < 0.){
+   continue;//Ray didn't intersect
+  }
+  else{
+   float t0 = (-b-pow(delta,0.5))/2.;
+   if(t0<0.){
+    continue;//Ray didn't intersect
+   }
+   if(t0<t){
+    hit = true;
+    t = t0;
+    surfacePos = rayPos + t*rayDir;
+    normal = normalize(surfacePos - spheres[i].pos);
+    hitMat.color = spheres[i].color;
+    hitMat.smoothness = spheres[i].smoothness;
+    hitMat.emission = spheres[i].emission;
+   }
+  }
+ }
+}
+
+float randNormDis(float x){
+ float theta = 2.*3.1415926*rand(x);
+ float rho = sqrt(-2.*log(rand(69.*x)));
+ return 1.5 * rho * cos(theta);
+}
+
+void recalcRayDir(){
+ if(rand(float(frame)*3.183)<hitMat.smoothness){
+  rayDir = normalize(rayDir - 2.*dot(rayDir, normal)*normal);
+ }
+ else{
+  rayDir = normalize(vec3(randNormDis(float(frame+1)*3.220),randNormDis(float(frame+1)/2.492),randNormDis(float(frame+1)/10.482)));
+  while(rayDir == vec3(0.,0.,0.)){
+   rayDir = normalize(vec3(randNormDis(float(frame+1)*27.29),randNormDis(float(frame+1)/9.12),randNormDis(float(frame+1)/17.391)));
+  }
+  if(dot(rayDir,normal)<0.){
+   rayDir *= -1.;
+  }
+ }
+}
+
+//Casts ray using rayPos and rayDir
+//Changes surfacePos, normal and hitMat
+void rayTrace(){
+ sphereCheck();
+ cubeCheck();
+}
+
+void main(void) {
+ rayPos = camPos;
+ initializeSpheres();
+ initializeCuboids();
+ rayDir = findInitRayDir();//Finds initial ray direction
+
+ for(int i=0;i<itr;i++){
+  rayTrace();
+  if(!hit){ break; }
+  hit = false;
+  finalColor += rayColor * hitMat.emission * hitMat.color;
+  rayColor *= hitMat.color;
+  rayPos = surfacePos + 0.001*normal;
+  t=1000000.;
+  recalcRayDir();
+ }
+
+ vec2 uv = gl_FragCoord.xy/resolution;
+ fragColor = (float(frame)*texture(backbuffer,uv)+vec4(finalColor, 1.0))/float(frame+1);
+ //fragColor = vec4(float(frame)*texture(backbuffer,uv).xyz+rayDir, 1.)/float(frame+1);
+ //fragColor = vec4(rayDir,1.);
+}
