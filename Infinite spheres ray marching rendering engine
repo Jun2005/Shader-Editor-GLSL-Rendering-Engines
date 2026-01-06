@@ -1,0 +1,128 @@
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+
+uniform vec2 resolution;
+uniform vec3 pointers[10];
+uniform int frame;
+uniform sampler2D backbuffer;
+
+//param
+vec3 cameraPos = vec3(0.0,0.0,-8.0);
+float fov = 40.0;
+int iterations = 100;
+float epsilon = 0.01;
+float maxDist = 200.0;
+vec3 sunPos = vec3(1.0,1.0,-2.0);
+vec3 sunColor = vec3(0.8,0.6,0.3);
+vec3 baseColor = vec3(0.3,0.7,0.6);
+float ambientBrightness = 0.1;
+float specularPower = 25.0;
+
+vec3 touchPos(){
+  vec2 centeredCoord = pointers[0].xy-resolution/2.0;
+  float hFov = fov/2.0;
+  float nearPlane = (resolution.x/2.0)/tan(radians(hFov));
+  float lambda = 8./nearPlane;
+  return vec3(lambda*centeredCoord,0.0);
+}
+
+float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5*(a-b)/k, 0.0, 1.0);
+    return mix(a, b, h) - k*h*(1.0-h);
+}
+
+vec3 repeatSDF(vec3 pos, vec3 offset){
+  return floor((pos-offset)/9.0+0.5)*9.0+offset;
+}
+
+float sphereSDF(vec3 pos,vec3 origin){
+  return length(pos-origin)-1.0;
+}
+
+float SDF(vec3 pos){
+  return smin(sphereSDF(pos, repeatSDF(pos,touchPos())),sphereSDF(pos, repeatSDF(pos, vec3(0.0,-2.0,0.0))),1.0);
+}
+
+vec3 rayDir(){
+  vec2 centeredCoord = gl_FragCoord.xy-resolution/2.0;
+  float hFov = fov/2.0;
+  float nearPlane = (resolution.x/2.0)/tan(radians(hFov));
+  vec3 dir = normalize(vec3(centeredCoord, nearPlane));
+  return dir;
+}
+
+float findDepth(){
+  float dist=0.0;
+  float change=0.0;
+  for (int i=0;i<iterations;i++){
+    change = SDF(cameraPos+rayDir()*dist);
+    if(change<=epsilon){
+      dist+=change;
+      break;
+    }
+    dist+=change;
+    if(dist>maxDist){
+      dist=maxDist;
+      break;
+    }
+  }
+  return dist;
+}
+
+vec3 findNormal(vec3 surfacePos){
+  vec3 normal = vec3(0.0,0.0,0.0);
+  normal.x = SDF(vec3(epsilon,0.0,0.0)+surfacePos)-SDF(vec3(-epsilon,0.0,0.0)+surfacePos);
+  normal.y = SDF(vec3(0.0,epsilon,0.0)+surfacePos)-SDF(vec3(0.0,-epsilon,0.0)+surfacePos);
+  normal.z = SDF(vec3(0.0,0.0,epsilon)+surfacePos)-SDF(vec3(0.0,0.0,-epsilon)+surfacePos);
+  return normalize(normal);
+}
+
+float diffuse(vec3 normal, vec3 surfacePos){
+  return clamp(dot(normal, normalize(sunPos-surfacePos)),0.0,1.0);
+}
+
+float specular(vec3 normal, vec3 surfacePos){
+  vec3 midDir = normalize((-rayDir()+normalize(sunPos-surfacePos))/2.0);
+  return pow(clamp(dot(normal, midDir),0.0,1.0),specularPower);
+}
+
+float remap(float x,float iMin, float iMax, float oMin, float oMax){
+  float ans = min(max(iMin, x),iMax);
+  return (ans-iMin)/(iMax-iMin)*(oMax-oMin)+oMin;
+}
+
+void main(void) {
+  vec3 color = vec3(0.0,0.0,0.0);
+  float depth = 0.0;
+  vec3 normal = vec3(0.0,0.0,0.0);
+  float brightness = 0.0;
+  vec3 surfacePos = vec3(0.0,0.0,0.0);
+  float attenuation = 0.0;
+
+  cameraPos = texture2D(backbuffer, vec2(0.5,0.5)/resolution).xyz*9. + vec3(0.1,0.,0.1);
+  if (gl_FragCoord.xy == vec2(0.5,0.5)){
+    if (texture2D(backbuffer, vec2(0.5,0.5)/resolution).z == 1.){
+      cameraPos = vec3(0.,0.,-8.);
+    }
+    gl_FragColor = vec4(cameraPos/9., 0.);
+    return;
+  }
+  sunPos = cameraPos + vec3(1.,1.,2.);
+
+  depth = findDepth();
+
+  if (depth!=maxDist){
+    surfacePos = cameraPos+rayDir()*depth;
+    attenuation = remap(distance(surfacePos,sunPos),0.0,maxDist,1.0,0.0);
+    normal = findNormal(surfacePos);
+    brightness = max(diffuse(normal,surfacePos),specular(normal,surfacePos));
+    brightness *= attenuation;
+    color = baseColor*ambientBrightness+sunColor*brightness;
+  }
+
+  //gl_FragColor = vec4((-gl_FragCoord.xy/2.0)/resolution,0.0,1.0);
+  gl_FragColor = vec4(color,1.0);
+}
